@@ -86,6 +86,7 @@ string getMateReferenceName(bam_hdr_t* header, bam1_t* record) {
   if (record->core.tid == record->core.mtid){
     return "=";
   }
+  if(record->core.mtid == -1) return "";
   return string(header->target_name[record->core.mtid]);
 }
 
@@ -102,6 +103,7 @@ int RecordPreprocessor::next_record(bam1_t *record){
   int ret = 0;
   while( (ret = sam_itr_next(in, iter, record)) >= -1 ){ //-1 means current bam file read to end
     if(ret == -1){
+
       if(hasAnotherBam){
         bamReader bam_reader = bamReaders_pre.back();
         this->in = bam_reader.in;
@@ -111,6 +113,11 @@ int RecordPreprocessor::next_record(bam1_t *record){
         if(bamReaders_pre.size() == 0){
           hasAnotherBam = false;
         }
+        string region_string = "";
+        region_string += region.chr + ":"+to_string(region.start) + "-" + to_string(region.end);
+
+        this->iter = sam_itr_querys(idx, header, region_string.c_str());
+ 
         ret = sam_itr_next(in, iter, record);
       }else{
         return -1;

@@ -737,9 +737,9 @@ CombineAnalysisData SomaticMode::combineAnalysis(Variant* variant1, Variant* var
 void SomaticMode::process(Configuration* conf, vector<vector<Region>> &segments){
 	
 	this->conf = conf;
-	this->file_ptr = fopen(conf->outFileName.c_str(), "wb");
-  std::string info_file = conf->outFileName + ".info";
-  this->info_file_ptr = fopen(info_file.c_str(), "wb");
+    this->file_ptr = fopen(conf->outFileName.c_str(), "wb");
+    std::string info_file = conf->outFileName + ".info";
+    this->info_file_ptr = fopen(info_file.c_str(), "wb");
 	if(this->file_ptr == NULL){
 		cerr << "open file: " << conf->outFileName << " error!" << endl;
 	}else{
@@ -792,166 +792,263 @@ void SomaticMode::process(Configuration* conf, vector<vector<Region>> &segments)
 		string variant_result = output(pair.tumor_scope, pair.normal_scope, trs);
 		fwrite(variant_result.c_str(), 1, variant_result.length(), this->file_ptr);
 
-    uint64_t tumor_sum_cov = 0;
-    uint64_t tumor_sum_pos = 0;
-    uint64_t normal_sum_cov = 0;
-    uint64_t normal_sum_pos = 0;
-    tumor_sum_cov  += trs.tumor_info.total_coverage;
-    tumor_sum_pos  += trs.tumor_info.covered_site;
-    normal_sum_cov += trs.normal_info.total_coverage;
-    normal_sum_pos += trs.normal_info.covered_site;
-    double tumor_avg_cov = tumor_sum_cov / (double)tumor_sum_pos;
-    double normal_avg_cov = normal_sum_cov / (double)tumor_sum_pos;
-    const string contex1 = std::to_string(tumor_avg_cov) + '\n' + std::to_string(normal_avg_cov) + "\n";
-    fwrite(contex1.c_str(), 1, contex1.length(), this->info_file_ptr);
+        uint64_t tumor_sum_cov = 0;
+        uint64_t tumor_sum_pos = 0;
+        uint64_t normal_sum_cov = 0;
+        uint64_t normal_sum_pos = 0;
+        tumor_sum_cov  += trs.tumor_info.total_coverage;
+        tumor_sum_pos  += trs.tumor_info.covered_site;
+        normal_sum_cov += trs.normal_info.total_coverage;
+        normal_sum_pos += trs.normal_info.covered_site;
+        double tumor_avg_cov = tumor_sum_cov / (double)tumor_sum_pos;
+        double normal_avg_cov = normal_sum_cov / (double)tumor_sum_pos;
+        const string contex1 = std::to_string(tumor_avg_cov) + '\n' + std::to_string(normal_avg_cov) + "\n";
+        fwrite(contex1.c_str(), 1, contex1.length(), this->info_file_ptr);
 
-		for(Variation* variation: trs.data_pool->_data){
-			delete variation;
-		}	
-		vector<Variation*>(trs.data_pool->_data).swap(trs.data_pool->_data);
-		delete trs.data_pool;
+        for(Variation* variation: trs.data_pool->_data){
+            delete variation;
+        }	
+        vector<Variation*>(trs.data_pool->_data).swap(trs.data_pool->_data);
+        delete trs.data_pool;
 
-	}
+    }
 	//-------------------use bed file: multithreads------------------------//
-	else 
-	{
-		cout << "[info] bed file name: " << conf->bed << endl;
-		double start_0 = get_time();
-		Region reg;
-		//vector<Region> regs;
-		dataPool* data_pool;
-		int max_ref_size = 0;
-		for(vector<Region> reg_vec: segments){
-			for(int i = 0; i < reg_vec.size(); i++){
-				mRegs.emplace_back(reg_vec[i]);
-				if((reg_vec[i].end - reg_vec[i].start) > max_ref_size){
-					max_ref_size = reg_vec[i].end - reg_vec[i].start;
-				}
-			}
-		}
-    const int reg_num = mRegs.size();
-    InitItemRepository(reg_num);
-		
-		int processor_num = conf->threads;
-		omp_set_num_threads(processor_num);
-		cout << "[info] num threads: " << processor_num << endl;
-#pragma omp parallel
+    else 
     {
+        cout << "[info] bed file name: " << conf->bed << endl;
+        double start_0 = get_time();
+        Region reg;
+        //vector<Region> regs;
+        dataPool* data_pool;
+        int max_ref_size = 0;
+        for(vector<Region> reg_vec: segments){
+            for(int i = 0; i < reg_vec.size(); i++){
+                mRegs.emplace_back(reg_vec[i]);
+                if((reg_vec[i].end - reg_vec[i].start) > max_ref_size){
+                    max_ref_size = reg_vec[i].end - reg_vec[i].start;
+                }
+            }
+        }
+        const int reg_num = mRegs.size();
+        InitItemRepository(reg_num);
+
+        int processor_num = conf->threads;
+        omp_set_num_threads(processor_num);
+        cout << "[info] num threads: " << processor_num << endl;
+
+#pragma omp parallel
+        {
 #pragma omp single
-      processor_num = omp_get_num_threads();
+            processor_num = omp_get_num_threads();
+        }
+
+
+        int ll_reg[processor_num];
+        int rr_reg[processor_num];
+        int per_thread_reg_num = ceil(1.0 * reg_num / processor_num);
+        int file_num = ssplit(conf->bam.getBam1(), ":").size();
+        bool split_read = 0;
+        if(file_num > 1) split_read = 1;
+
+        int mp_chr_num[processor_num][26] = {0};
+        #pragma omp parallel
+        {
+            int thread_id = omp_get_thread_num();
+            ll_reg[thread_id] = thread_id * per_thread_reg_num;
+            rr_reg[thread_id] = (thread_id + 1) * per_thread_reg_num;
+            rr_reg[thread_id] = std::min(reg_num, rr_reg[thread_id]);
+
+            if(split_read) {
+                for(int i = ll_reg[thread_id]; i < rr_reg[thread_id]; i++) {
+                    int digit = 24;
+                    size_t chrPos = mRegs[i].chr.find("chr");
+
+                    if (chrPos != std::string::npos) {
+                        std::string digitStr = mRegs[i].chr.substr(chrPos + 3);
+                        if(mRegs[i].chr.length() - 3 <= 2)
+                            digit = std::stoi(digitStr);
+                    } else {
+                        std::cerr << "Error : regin has no chr info" << std::endl;
+                        exit(0);
+                    }
+                    assert(digit >= 1 && digit <= 22);
+                    mp_chr_num[thread_id][digit] = 1;
+                }
+
+            }
+
+        }
+
+        //for(int i = 0; i < processor_num; i++) {
+        //    printf("thread === %d\n", i);
+        //    for(int j = 1; j <= 22; j++)
+        //        if(mp_chr_num[i][j] == 1)
+        //            printf("%d\n", j);
+        //}
+        //printf("\n\n");
+
+        double * time = new double[processor_num];
+        for(int i = 0; i < processor_num; i++)	time[i] = 0.0;
+        SomaticThreadResource *trs = new SomaticThreadResource[processor_num];
+        //#pragma omp parallel for schedule(static) //num_threads(processor_num)
+        for(int t = 0; t < processor_num; t++){
+            //----add by haoz: init bamReader------//
+            trs[t].bamReaders.resize(2);
+            if(conf->bam.getBam1() != ""){
+                //cerr << "[debug]: bam1: " << conf->bam.getBam1() << endl;
+                int now_bamfile_num = 0;
+                for(string bamname: ssplit(conf->bam.getBam1(), ":")){
+                    if(split_read) {
+                        std::string only_file_name;
+                        size_t lastSlashPos = bamname.find_last_of('/');
+                        if (lastSlashPos != std::string::npos) {
+                            only_file_name = bamname.substr(lastSlashPos + 1);
+                        } else {
+                            only_file_name = bamname;
+                        }
+                        size_t start_dig_pos = only_file_name.find_first_of("0123456789");
+                        size_t end_dig_pos = only_file_name.find_last_of("0123456789");
+
+                        int chr_number = 23;
+                        if (start_dig_pos != std::string::npos && end_dig_pos != std::string::npos) {
+                            std::string number_str = only_file_name.substr(start_dig_pos, end_dig_pos - start_dig_pos + 1);
+                            chr_number = std::stoi(number_str) + 1;
+                        } else {
+                            std::cerr << "Error : No number found in the filename - " << only_file_name << std::endl;
+                        }
+                        //printf("thread%d chr%d %d\n", t, chr_number, mp_chr_num[t][chr_number]);
+                        if(mp_chr_num[t][chr_number] == 0 && now_bamfile_num > 0) continue;
+                        now_bamfile_num++;
+                    }
+
+                    samFile* in = sam_open(bamname.c_str(), "r");
+                    bam_hdr_t* header;
+                    hts_idx_t* idx;
+                    if(in){
+                        header = sam_hdr_read(in);
+                        idx = sam_index_load(in, bamname.c_str());
+                        assert(idx != NULL);
+                    }else{
+                        cerr << "read bamFile: " << bamname <<  " error!" << endl;
+                        exit(1);
+                    }
+                    trs[t].bamReaders[0].emplace_back(bamReader(in, header, idx));
+                }
+            }
+            if(conf->bam.getBam2() != ""){
+                //cerr << "[debug]: bam2: " << conf->bam.getBam2() << endl;
+                int now_bamfile_num = 0;
+                for(string bamname: ssplit(conf->bam.getBam2(), ":")){
+                    if(split_read) {
+                        std::string only_file_name;
+                        size_t lastSlashPos = bamname.find_last_of('/');
+                        if (lastSlashPos != std::string::npos) {
+                            only_file_name = bamname.substr(lastSlashPos + 1);
+                        } else {
+                            only_file_name = bamname;
+                        }
+                        size_t start_dig_pos = only_file_name.find_first_of("0123456789");
+                        size_t end_dig_pos = only_file_name.find_last_of("0123456789");
+
+                        int chr_number = 23;
+                        if (start_dig_pos != std::string::npos && end_dig_pos != std::string::npos) {
+                            std::string number_str = only_file_name.substr(start_dig_pos, end_dig_pos - start_dig_pos + 1);
+                            chr_number = std::stoi(number_str) + 1;
+                        } else {
+                            std::cerr << "Error : No number found in the filename - " << only_file_name << std::endl;
+                        }
+                        //printf("thread%d chr%d %d\n", t, chr_number, mp_chr_num[t][chr_number]);
+                        if(mp_chr_num[t][chr_number] == 0 && now_bamfile_num > 0) continue;
+                        now_bamfile_num++;
+                    }
+
+                    samFile* in = sam_open(bamname.c_str(), "r");
+                    bam_hdr_t* header;
+                    hts_idx_t* idx;
+                    if(in){
+                        header = sam_hdr_read(in);
+                        idx = sam_index_load(in, bamname.c_str());
+                        assert(idx != NULL);
+                    }else{
+                        cerr << "read bamFile: " << bamname <<  " error!" << endl;
+                        exit(1);
+                    }
+                    trs[t].bamReaders[1].emplace_back(bamReader(in, header, idx));
+                }
+            }
+            assert(trs[t].bamReaders[0].size() > 0);
+            //----init bamReader end------//
+            trs[t].data_pool = new dataPool(conf->mempool_size);
+        }
+        double end_0 = get_time();
+        std::cerr << "generate thread resource" << end_0 - start_0 << std::endl;
+        #pragma omp parallel default(shared) private(reg, data_pool) 
+        {
+            int thread_id = omp_get_thread_num();
+            for(int i = ll_reg[thread_id]; i < rr_reg[thread_id]; i++){
+                double start2 = get_time();
+                reg = mRegs[i];
+                data_pool = trs[thread_id].data_pool;
+                //cout <<"thread: " << omp_get_thread_num() << "region id: " << i <<" processing: " << reg.chr << " - " << reg.start << " - " << reg.end  << endl;
+                set<string> splice;
+                ScopePair pair = one_region_run_somt(reg, conf, trs[thread_id], &splice);
+                double end2 = get_time();
+                //cerr << " omp time: " << end2 - start2 << endl;
+                time[omp_get_thread_num()] += end2 - start2;
+
+                //bam2: normal, bam1: tumor
+                string variant_result = output(pair.tumor_scope, pair.normal_scope, trs[thread_id]);
+#pragma omp critical
+                {
+                    fwrite(variant_result.c_str(), 1, variant_result.length(), this->file_ptr);
+                }
+                delete pair.tumor_scope->data;
+                delete pair.normal_scope->data;
+            }
+        }
+        double end_1 = get_time();
+        std::cerr << "parallel time" << end_1 - end_0 << std::endl;
+
+        //------compute the average of all region ---------//
+        uint64_t tumor_sum_cov = 0;
+        uint64_t tumor_sum_pos = 0;
+        uint64_t normal_sum_cov = 0;
+        uint64_t normal_sum_pos = 0;
+        for(int t = 0; t < processor_num; t++){
+            tumor_sum_cov  += trs[t].tumor_info.total_coverage;
+            tumor_sum_pos  += trs[t].tumor_info.covered_site;
+            normal_sum_cov += trs[t].normal_info.total_coverage;
+            normal_sum_pos += trs[t].normal_info.covered_site;
+        }
+        double tumor_avg_cov = tumor_sum_cov / (double)tumor_sum_pos;
+        double normal_avg_cov = normal_sum_cov / (double)tumor_sum_pos;
+        const string contex1 = std::to_string(tumor_avg_cov) + '\n' + std::to_string(normal_avg_cov) + "\n";
+        fwrite(contex1.c_str(), 1, contex1.length(), this->info_file_ptr);
+
+        //------free threadResource_somatic------
+        for(int t = 0; t < processor_num; t++){
+            //-------free mem pool------//
+            dataPool* data_pool = trs[t].data_pool;
+            for(Variation* variation: data_pool->_data){
+                delete variation;
+            }	
+            vector<Variation*>(data_pool->_data).swap(data_pool->_data);
+            delete trs[t].data_pool;
+            //------free bamreader-----//
+            for(vector<bamReader> &vbr: trs[t].bamReaders){
+                for(bamReader br: vbr){
+                    //free idx;
+                    hts_idx_destroy(br.idx);
+                    bam_hdr_destroy(br.header);
+                    if(br.in) sam_close(br.in);
+                }
+            }
+        }
+
+        delete[] trs;
+
+        for(int i = 0; i < processor_num; i++)
+            cerr << "thread: " << i << " time: " << time[i] << endl;
     }
-    double * time = new double[processor_num];
-		for(int i = 0; i < processor_num; i++)	time[i] = 0.0;
-		SomaticThreadResource *trs = new SomaticThreadResource[processor_num];
-//#pragma omp parallel for schedule(static) //num_threads(processor_num)
-		for(int t = 0; t < processor_num; t++){
-			//----add by haoz: init bamReader------//
-			trs[t].bamReaders.resize(2);
-			if(conf->bam.getBam1() != ""){
-				//cerr << "[debug]: bam1: " << conf->bam.getBam1() << endl;
-				for(string bamname: ssplit(conf->bam.getBam1(), ":")){
-					samFile* in = sam_open(bamname.c_str(), "r");
-					bam_hdr_t* header;
-					hts_idx_t* idx;
-					if(in){
-						header = sam_hdr_read(in);
-						idx = sam_index_load(in, bamname.c_str());
-						assert(idx != NULL);
-					}else{
-						cerr << "read bamFile: " << bamname <<  " error!" << endl;
-						exit(1);
-					}
-					trs[t].bamReaders[0].emplace_back(bamReader(in, header, idx));
-				}
-			}
-			if(conf->bam.getBam2() != ""){
-				//cerr << "[debug]: bam2: " << conf->bam.getBam2() << endl;
-				for(string bamname: ssplit(conf->bam.getBam2(), ":")){
-					samFile* in = sam_open(bamname.c_str(), "r");
-					bam_hdr_t* header;
-					hts_idx_t* idx;
-					if(in){
-						header = sam_hdr_read(in);
-						idx = sam_index_load(in, bamname.c_str());
-						assert(idx != NULL);
-					}else{
-						cerr << "read bamFile: " << bamname <<  " error!" << endl;
-						exit(1);
-					}
-					trs[t].bamReaders[1].emplace_back(bamReader(in, header, idx));
-				}
-			}
-			assert(trs[t].bamReaders[0].size() > 0);
-			//----init bamReader end------//
-			trs[t].data_pool = new dataPool(conf->mempool_size);
-		}
-    double end_0 = get_time();
-    std::cerr << "generate thread resource" << end_0 - start_0 << std::endl;
-#pragma omp parallel for default(shared) private(reg, data_pool) schedule(dynamic) //num_threads(2)
-		for(int i = 0; i < reg_num; i++){
-			double start2 = get_time();
-			int thread_id = omp_get_thread_num();
-			reg = mRegs[i];
-			data_pool = trs[thread_id].data_pool;
-			//cout <<"thread: " << omp_get_thread_num() << "region id: " << i <<" processing: " << reg.chr << " - " << reg.start << " - " << reg.end  << endl;
-			set<string> splice;
-			ScopePair pair = one_region_run_somt(reg, conf, trs[thread_id], &splice);
-			double end2 = get_time();
-			//cerr << " omp time: " << end2 - start2 << endl;
-			time[omp_get_thread_num()] += end2 - start2;
-
-			//bam2: normal, bam1: tumor
-			string variant_result = output(pair.tumor_scope, pair.normal_scope, trs[thread_id]);
-			#pragma omp critical
-			{
-				fwrite(variant_result.c_str(), 1, variant_result.length(), this->file_ptr);
-			}
-			delete pair.tumor_scope->data;
-			delete pair.normal_scope->data;
-		}
-		double end_1 = get_time();
-		std::cerr << "parallel time" << end_1 - end_0 << std::endl;
-
-    //------compute the average of all region ---------//
-    uint64_t tumor_sum_cov = 0;
-    uint64_t tumor_sum_pos = 0;
-    uint64_t normal_sum_cov = 0;
-    uint64_t normal_sum_pos = 0;
-    for(int t = 0; t < processor_num; t++){
-      tumor_sum_cov  += trs[t].tumor_info.total_coverage;
-      tumor_sum_pos  += trs[t].tumor_info.covered_site;
-      normal_sum_cov += trs[t].normal_info.total_coverage;
-      normal_sum_pos += trs[t].normal_info.covered_site;
-    }
-    double tumor_avg_cov = tumor_sum_cov / (double)tumor_sum_pos;
-    double normal_avg_cov = normal_sum_cov / (double)tumor_sum_pos;
-    const string contex1 = std::to_string(tumor_avg_cov) + '\n' + std::to_string(normal_avg_cov) + "\n";
-    fwrite(contex1.c_str(), 1, contex1.length(), this->info_file_ptr);
-
-		//------free threadResource_somatic------
-		for(int t = 0; t < processor_num; t++){
-			//-------free mem pool------//
-			dataPool* data_pool = trs[t].data_pool;
-			for(Variation* variation: data_pool->_data){
-				delete variation;
-			}	
-			vector<Variation*>(data_pool->_data).swap(data_pool->_data);
-			delete trs[t].data_pool;
-			//------free bamreader-----//
-			for(vector<bamReader> &vbr: trs[t].bamReaders){
-				for(bamReader br: vbr){
-					//free idx;
-					hts_idx_destroy(br.idx);
-					bam_hdr_destroy(br.header);
-					if(br.in) sam_close(br.in);
-				}
-			}
-		}
-
-		delete[] trs;
-
-		for(int i = 0; i < processor_num; i++)
-			cerr << "thread: " << i << " time: " << time[i] << endl;
-	}
 	fclose(this->file_ptr);
 }
